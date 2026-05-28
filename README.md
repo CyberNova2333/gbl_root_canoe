@@ -55,7 +55,7 @@ When flashing the Magisk module via a root manager (like KernelSU, Magisk, or AP
 
 ### 2. Using the PC Toolkits (Linux / Windows)
 
-If you downloaded the `dist_loader` or `dist_loader_windows` zip files:
+If you downloaded the `target_toolkit_linux` or `target_toolkit_windows` zip files:
 1. Extract the toolkit zip on your PC.
 2. Place your device's stock `abl.img` inside the `images/` (or `images\`) directory of the toolkit.
 3. **Linux:** Run `bash build.sh` (or `make build`). **Windows:** Run `build.bat`.
