@@ -132,6 +132,26 @@ other_slot() {
 
 partition_path() { echo "$BY_NAME_DIR/$1$2"; }
 
+# Make a block device writable the way GUI flashers (e.g. Scene) do, then
+# return. This is best-effort and never fails the caller: some ROMs do not
+# ship "blockdev" or reject BLKROSET on that node, yet a plain dd still
+# succeeds. Previously a failing "blockdev --setrw" aborted the whole flash
+# before dd was ever attempted; now the dd result is what decides success.
+set_block_rw() {
+  _dev="$1"
+  _real=$(readlink -f "$_dev" 2>/dev/null)
+  [ -n "$_real" ] || _real="$_dev"
+  _base=$(basename "$_real")
+  # clear the per-partition force_ro guard used by UFS/eMMC partitions
+  for _n in /sys/block/*/"$_base"/force_ro /sys/block/"$_base"/force_ro; do
+    [ -w "$_n" ] && echo 0 > "$_n" 2>/dev/null
+  done
+  # clear the BLKROSET ioctl flag (absent / unsupported on some ROMs)
+  blockdev --setrw "$_real" >> "$LOG_FILE" 2>&1
+  [ "$_real" = "$_dev" ] || blockdev --setrw "$_dev" >> "$LOG_FILE" 2>&1
+  return 0
+}
+
 current_pid() {
   [ -f "$PID_FILE" ] || return 1
   pid=$(cat "$PID_FILE" | tr -d '[:space:]')
@@ -163,10 +183,7 @@ patch_efisp() {
     return 0
   fi
 
-  if ! blockdev --setrw "$BY_NAME_DIR/efisp" >> "$LOG_FILE" 2>&1; then
-    write_log "$TEXT_EFISP_SET_RW_FAILED"
-    return 1
-  fi
+  set_block_rw "$BY_NAME_DIR/efisp"
   if ! dd if=$RUNTIME_DIR/patched.efi of="$BY_NAME_DIR/efisp" bs=4M conv=fsync >> "$LOG_FILE" 2>&1; then
     write_log "$TEXT_EFISP_FLASH_FAILED"
     return 1
@@ -289,7 +306,7 @@ run_flash() {
   for part in $IMAGE_NAMES; do
     dst=$(partition_path "$part" "$target_slot")
     src=$(partition_path "$part" "$current_slot")
-    blockdev --setrw "$dst" >> "$LOG_FILE" 2>&1 || { write_state error "$TEXT_SET_RW_FAILED"; exit 1; }
+    set_block_rw "$dst"
     dd if="$src" of="$dst" bs=4M conv=fsync >> "$LOG_FILE" 2>&1 || { write_state error "$TEXT_FLASH_PART failed"; exit 1; }
     sync
     write_log "$TEXT_FLASH_PART $part -> $dst $TEXT_FLASH_OK"

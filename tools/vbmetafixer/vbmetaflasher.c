@@ -170,24 +170,28 @@ static int transplant_vbmeta(const char *vbmeta_path, const char *source_image,
         printf("  Target has existing VBMeta, original data size: %llu\n",
                (unsigned long long)original_size);
     } else {
-        original_size = target_size - vbmeta_size - AVB_FOOTER_SIZE;
-        printf("  Target has no VBMeta, calculated original size: %llu\n",
+        original_size = target_size;
+        printf("  Target has no VBMeta, using full image as original data: %llu\n",
                (unsigned long long)original_size);
     }
 
+    /* never read past the donor image when copying the original data */
+    if (original_size > target_size)
+        original_size = target_size;
+
     uint64_t vbmeta_offset = original_size;
-    uint64_t footer_offset = target_size - AVB_FOOTER_SIZE;
     uint64_t required = original_size + vbmeta_size + AVB_FOOTER_SIZE;
 
-    if (required > target_size) {
-        fprintf(stderr, "Insufficient space: need %llu, have %llu\n",
-                (unsigned long long)required, (unsigned long long)target_size);
-        free(vbmeta_data);
-        free(target_data);
-        return -1;
-    }
+    /*
+     * Grow the output instead of aborting when the donor image is too small
+     * to hold the transplanted vbmeta + footer. Aborting here prevented
+     * patching recovery images whose stock vbmeta is larger than the slack
+     * in the donor image; same-logic third-party tools grow the buffer.
+     */
+    uint64_t output_size = required > target_size ? required : target_size;
+    uint64_t footer_offset = output_size - AVB_FOOTER_SIZE;
 
-    uint8_t *output = calloc(1, target_size);
+    uint8_t *output = calloc(1, output_size);
     if (!output) {
         free(vbmeta_data);
         free(target_data);
@@ -201,7 +205,7 @@ static int transplant_vbmeta(const char *vbmeta_path, const char *source_image,
     free(target_data);
     free(vbmeta_data);
 
-    if (write_file(output_path, output, target_size) != 0) {
+    if (write_file(output_path, output, output_size) != 0) {
         fprintf(stderr, "Failed to write transplanted image: %s\n", output_path);
         free(output);
         return -1;
@@ -209,8 +213,8 @@ static int transplant_vbmeta(const char *vbmeta_path, const char *source_image,
 
     /* verify */
     uint64_t v_orig, v_off, v_sz;
-    if (read_avb_footer(output, target_size, &v_orig, &v_off, &v_sz)) {
-        if (v_off + v_sz <= target_size &&
+    if (read_avb_footer(output, output_size, &v_orig, &v_off, &v_sz)) {
+        if (v_off + v_sz <= output_size &&
             memcmp(output + v_off, AVB_MAGIC, 4) == 0) {
             printf("  VBMeta transplant verified OK\n");
         } else {

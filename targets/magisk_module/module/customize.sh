@@ -105,6 +105,22 @@ BY_NAME_DIR=/dev/block/by-name
 RUNTIME_DIR=$MODPATH/tmp
 mkdir -p $RUNTIME_DIR
 
+# Best-effort clear of every read-only guard on a block device, like GUI
+# flashers (e.g. Scene) do. Never fails: some ROMs lack "blockdev" or reject
+# BLKROSET, yet a plain dd still works, so the dd result decides success.
+set_block_rw() {
+  _dev="$1"
+  _real=$(readlink -f "$_dev" 2>/dev/null)
+  [ -n "$_real" ] || _real="$_dev"
+  _base=$(basename "$_real")
+  for _n in /sys/block/*/"$_base"/force_ro /sys/block/"$_base"/force_ro; do
+    [ -w "$_n" ] && echo 0 > "$_n" 2>/dev/null
+  done
+  blockdev --setrw "$_real" >> $RUNTIME_DIR/flash.log 2>&1
+  [ "$_real" = "$_dev" ] || blockdev --setrw "$_dev" >> $RUNTIME_DIR/flash.log 2>&1
+  return 0
+}
+
 ui_print "$T_EFISP_TITLE"
 ui_print "$T_SOC"
 ui_print "$T_CHECK_EXP"
@@ -135,10 +151,7 @@ while true; do
       ui_print "$T_NO_GBL"
       abort "no exploit"
     fi
-    if ! blockdev --setrw $BY_NAME_DIR/efisp >> $RUNTIME_DIR/flash.log 2>&1; then
-      ui_print "$T_SETRW_FAIL"
-      abort "setrw failed"
-    fi
+    set_block_rw $BY_NAME_DIR/efisp
     if ! dd if=$RUNTIME_DIR/patched.efi of=$BY_NAME_DIR/efisp bs=4M conv=fsync >> $RUNTIME_DIR/flash.log 2>&1; then
       ui_print "$T_FLASH_FAIL"
       abort "flash failed"
