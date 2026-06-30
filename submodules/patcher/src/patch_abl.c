@@ -2,6 +2,7 @@
 //FILE
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 /* ==================== main ==================== */
 int32_t read_file(const char* filename, char** data, int32_t* size) {
     FILE* file = fopen(filename, "rb");
@@ -18,17 +19,22 @@ int32_t read_file(const char* filename, char** data, int32_t* size) {
     return 0;
 }
 int32_t main(int32_t argc, char* argv[]) {
-    if (argc != 3) {
-        printf("Usage: %s <input_file> <output_file>\n", argv[0]);
+    if (argc < 3 || argc > 4) {
+        printf("Usage: %s <input_file> <output_file> [--keep-warning]\n", argv[0]);
+        printf("  --keep-warning  do NOT remove the yellow unlock warning.\n");
+        printf("                  Required for third-party Recovery to boot\n");
+        printf("                  under fake-lock (OPlus). The warning is shown.\n");
         return EXIT_FAILURE;
     }
+    bool keep_warning = (argc == 4 &&
+                         (strcmp(argv[3], "--keep-warning") == 0));
     char* data = NULL;
     int32_t size = 0;
     if (read_file(argv[1], &data, &size) != 0) {
         printf("Failed to read file: %s\n", argv[1]);
         return EXIT_FAILURE;
     }
-    if (!PatchBuffer(data,size))
+    if (!PatchBuffer(data,size,keep_warning))
     {
         printf("Patching failed\n");
         free(data);
