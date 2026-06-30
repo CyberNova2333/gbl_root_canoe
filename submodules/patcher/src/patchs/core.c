@@ -172,6 +172,7 @@ int32_t patch_adrl_unlocked_to_locked(char* buffer, int32_t size, uint64_t load_
 
 #include "patchs/oplus/warning.h"
 #include "patchs/oplus/forceenablefastboot.h"
+/* forceenablerecovery: disabled pending on-device validation (see PatchBuffer) */
 #include "patchs/oplus/forceenablerecovery.h"
 bool PatchBuffer(char* data, int32_t size) {
     if (patch_abl_gbl(data, size) != 0)
@@ -213,10 +214,21 @@ bool PatchBuffer(char* data, int32_t size) {
         printf("OPlus Warning: patch_warning failed\n");
     }
 
-    // Allow booting Recovery while the bootloader is faked as locked.
-    if (!patch_recovery(data, size, global_var_offset)) {
-        printf("OPlus Warning: patch_recovery skipped (gate not present)\n");
-    }
+    /*
+     * Recovery-while-fake-locked patch is DISABLED pending on-device
+     * validation. Static analysis confirmed the loop's cause (the OPlus
+     * olock gate reboots via ResetSystem), but the gate's continue target
+     * (0x6d64 on the analysed image) lands in the *fastboot* launch path,
+     * not the recovery-boot path, so neutralising it would send
+     * `reboot recovery` into fastboot instead of recovery. Determining the
+     * correct recovery-boot exit needs runtime confirmation. See
+     * forceenablerecovery.c for the full analysis. Do not enable this on a
+     * device you cannot recover via EDL/fastboot.
+     *
+     * if (!patch_recovery(data, size, global_var_offset)) {
+     *     printf("OPlus Warning: patch_recovery skipped (gate not present)\n");
+     * }
+     */
     #ifdef ENABLE_TESTING_PATCHS
     if (!patch_fastboot(data, size, global_var_offset)) {
         printf("OPlus Warning: patch_fastboot failed\n");

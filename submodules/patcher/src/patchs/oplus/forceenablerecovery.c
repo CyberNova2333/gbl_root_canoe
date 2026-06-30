@@ -2,6 +2,27 @@
 #include "arm64_inst/utils.h"
 
 /*
+ * ============================ STATUS: DISABLED ============================
+ * This patch is NOT wired into PatchBuffer. It is kept for the analysis and
+ * for completion once the correct target is confirmed on-device.
+ *
+ * Why disabled: deeper disassembly showed the routine that holds this gate
+ * (0x4e50 on the analysed image) is the bootloader / fastboot-mode handler,
+ * and the gate's "continue" label (0x6d64) is its FASTBOOT-LAUNCH branch
+ * (it prints "Launching fastboot" / "Fastboot Build Info" and locates the
+ * fastboot transport protocol; 0x3e440 right after it is the fastboot
+ * unlock-verify, which itself can ResetSystem). So redirecting the refusal
+ * there would send `reboot recovery` into fastboot, not Recovery, and could
+ * still reboot. The real "boot the selected recovery image" exit is not in
+ * this function and could not be pinned down with confidence from the binary
+ * alone. Enabling a wrong guess here risks misboot / a loop on a device the
+ * user cannot currently recover, so it stays off until validated on-device.
+ *
+ * What IS confirmed and useful: the loop is a real cold reset. 0x29268 is a
+ * ResetSystem wrapper ([gRT+0x68]); the olock gate hits `mov w0,#0x3e; bl
+ * ResetSystem` on the recovery-refusal path.
+ * =========================================================================
+ *
  * OPlus ABL refuses Recovery while the bootloader looks locked. Because this
  * project fakes a locked state, the normal system boots but `reboot recovery`
  * is rejected and the device reboots, looping forever.
