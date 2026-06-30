@@ -129,11 +129,21 @@ static int read_footer_orig(const uint8_t *d, size_t n, uint64_t *orig) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 4) {
-        printf("Usage: %s <stock_recovery.vbmeta> <new_recovery.img> <output.img>\n", argv[0]);
+    if (argc != 5) {
+        printf("Usage: %s <stock_recovery.vbmeta> <new_recovery.img> "
+               "<partition_size> <output.img>\n", argv[0]);
+        printf("  partition_size: recovery partition size in bytes "
+               "(e.g. 104857600 for 100 MiB). The footer is placed at the very\n"
+               "  end of the partition, where the bootloader looks for it, so the\n"
+               "  output is exactly partition_size bytes.\n");
         return 1;
     }
-    const char *vb_path = argv[1], *img_path = argv[2], *out_path = argv[3];
+    const char *vb_path = argv[1], *img_path = argv[2], *out_path = argv[4];
+    uint64_t partition_size = strtoull(argv[3], NULL, 0);
+    if (partition_size < AVB_VBMETA_IMAGE_HEADER_SIZE + AVB_FOOTER_SIZE) {
+        fprintf(stderr, "Invalid partition_size '%s'\n", argv[3]);
+        return 1;
+    }
 
     size_t vb_size, img_size;
     uint8_t *vb = read_file(vb_path, &vb_size);
@@ -205,58 +215,72 @@ int main(int argc, char **argv) {
         free(vb); free(img); return 1;
     }
 
-    /* --- recompute the descriptor digest for the new image --- */
+    printf("Hash descriptor: alg=%s salt_len=%u digest_len=%u partition='%.*s'\n",
+           alg, salt_len, dig_len, (int)pname_len, hd + 132);
+
+    /* --- partition layout (matches avbtool / what the bootloader expects) ---
+     *   [ image | zero-pad to block ][ vbmeta ][ zeros ][ footer @ end ]
+     * The image is block-aligned, the descriptor hash covers the block-aligned
+     * image, the vbmeta sits right after it, and the footer is at the very end
+     * of the partition (where libavb reads the last 64 bytes). */
+    const uint64_t BLOCK = 4096;
+    uint64_t aligned = (new_image_size + (BLOCK - 1)) & ~(BLOCK - 1);
+    if (aligned + vb_size + AVB_FOOTER_SIZE > partition_size) {
+        fprintf(stderr, "Does not fit: image(%llu) + vbmeta(%zu) + footer(64) "
+                "> partition(%llu)\n", (unsigned long long)aligned, vb_size,
+                (unsigned long long)partition_size);
+        free(vb); free(img); return 1;
+    }
+
+    uint8_t *out = calloc(1, partition_size);
+    if (!out) {
+        fprintf(stderr, "Out of memory (%llu bytes)\n",
+                (unsigned long long)partition_size);
+        free(vb); free(img); return 1;
+    }
+    memcpy(out, img, (size_t)new_image_size);   /* [new_image_size:aligned] = 0 */
+
+    /* digest over the block-aligned image (image bytes + zero padding) */
     uint8_t newdig[64];
-    size_t newdig_len = hash_image(alg, salt, salt_len, img, (size_t)new_image_size, newdig);
+    size_t newdig_len = hash_image(alg, salt, salt_len, out, (size_t)aligned, newdig);
     if (newdig_len == 0) {
         fprintf(stderr, "Unsupported descriptor hash_algorithm '%s'\n", alg);
-        free(vb); free(img); return 1;
+        free(vb); free(img); free(out); return 1;
     }
     if (newdig_len != dig_len) {
         fprintf(stderr, "Algorithm '%s' digest len %zu != descriptor digest_len %u\n",
                 alg, newdig_len, dig_len);
-        free(vb); free(img); return 1;
+        free(vb); free(img); free(out); return 1;
     }
 
-    printf("Hash descriptor: alg=%s salt_len=%u digest_len=%u partition='%.*s'\n",
-           alg, salt_len, dig_len, (int)pname_len, hd + 132);
-
-    /* write new image_size (BE u64 @ +16) and new digest into the descriptor */
-    put_be64(hd + 16, new_image_size);
+    /* update the hash descriptor in the vbmeta: image_size = aligned, new digest */
+    put_be64(hd + 16, aligned);
     memcpy(digest, newdig, dig_len);
 
-    /* --- recompute the vbmeta authentication hash (signature left stale) --- */
+    /* recompute the vbmeta authentication (integrity) hash; signature left stale */
     if (recompute_auth_hash(vb, vb_size) != 0) {
         fprintf(stderr, "Failed to recompute vbmeta authentication hash\n");
-        free(vb); free(img); return 1;
+        free(vb); free(img); free(out); return 1;
     }
     printf("Recomputed vbmeta integrity hash; signature left unchanged "
            "(valid only if recovery path skips signature check)\n");
 
-    /* --- assemble output: image[0:new_image_size] + vbmeta + footer --- */
-    uint64_t footer_off;
-    uint64_t out_size = new_image_size + vb_size + AVB_FOOTER_SIZE;
-    if (out_size < img_size) out_size = img_size;   /* never shrink the donor */
-    footer_off = out_size - AVB_FOOTER_SIZE;
-
-    uint8_t *out = calloc(1, out_size);
-    if (!out) { fprintf(stderr, "OOM\n"); free(vb); free(img); return 1; }
-    memcpy(out, img, (size_t)new_image_size);
-    memcpy(out + new_image_size, vb, vb_size);
-    /* footer */
-    uint8_t *f = out + footer_off;
+    /* place vbmeta after the aligned image, footer at the partition end */
+    memcpy(out + aligned, vb, vb_size);
+    uint8_t *f = out + partition_size - AVB_FOOTER_SIZE;
     memcpy(f, AVB_FOOTER_MAGIC, 4);
     put_be32(f + 4, 1); put_be32(f + 8, 0);
-    put_be64(f + 12, new_image_size);       /* original_image_size */
-    put_be64(f + 20, new_image_size);       /* vbmeta_offset       */
+    put_be64(f + 12, aligned);              /* original_image_size */
+    put_be64(f + 20, aligned);              /* vbmeta_offset       */
     put_be64(f + 28, vb_size);              /* vbmeta_size         */
 
-    /* --- self-verify --- */
+    /* --- self-verify on the assembled output --- */
     uint8_t chk[64];
-    size_t clen = hash_image(alg, salt, salt_len, out, (size_t)new_image_size, chk);
-    int img_ok = (clen == dig_len) && (memcmp(chk, out + new_image_size + (hd - vb) + 132 + pname_len + salt_len, dig_len) == 0);
-    /* re-derive auth hash on the embedded vbmeta and compare */
-    uint8_t *emb = out + new_image_size;
+    size_t clen = hash_image(alg, salt, salt_len, out, (size_t)aligned, chk);
+    uint8_t *emb = out + aligned;
+    uint8_t *emb_digest = emb + (size_t)(hd - vb) + 132 + pname_len + salt_len;
+    int img_ok = (clen == dig_len) && memcmp(chk, emb_digest, dig_len) == 0;
+
     uint8_t saved[64];
     uint32_t ealg = be32(emb + 0x1c);
     uint64_t eh_off = be64(emb + 0x20), eh_sz = be64(emb + 0x28);
@@ -267,12 +291,16 @@ int main(int argc, char **argv) {
         auth_ok = memcmp(saved, emb + AVB_VBMETA_IMAGE_HEADER_SIZE + eh_off, (size_t)eh_sz) == 0;
     }
 
-    if (write_file(out_path, out, out_size) != 0) {
+    if (write_file(out_path, out, partition_size) != 0) {
         fprintf(stderr, "Cannot write output: %s\n", out_path);
         free(vb); free(img); free(out); return 1;
     }
 
-    printf("\nWrote %s (%llu bytes)\n", out_path, (unsigned long long)out_size);
+    printf("\nWrote %s (%llu bytes, partition-sized)\n",
+           out_path, (unsigned long long)partition_size);
+    printf("  image: 0x0..0x%llx, vbmeta @ 0x%llx, footer @ 0x%llx\n",
+           (unsigned long long)aligned, (unsigned long long)aligned,
+           (unsigned long long)(partition_size - AVB_FOOTER_SIZE));
     printf("  image hash self-check : %s\n", img_ok  ? "OK" : "FAILED");
     printf("  vbmeta integrity check: %s\n", auth_ok ? "OK" : "FAILED");
     printf("  vbmeta signature      : NOT re-signed (works only if recovery "
