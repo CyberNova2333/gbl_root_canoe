@@ -152,6 +152,17 @@ set_block_rw() {
   return 0
 }
 
+# Read the first N bytes back from a partition (N = size of the source) and
+# compare against the source, so a silent / partial write is caught before the
+# device is rebooted. Returns: 0 match, 1 mismatch, 2 cannot verify (skip).
+verify_partition() {
+  _vsrc="$1"; _vdst="$2"
+  command -v cmp >/dev/null 2>&1 || return 2
+  _vsz=$(wc -c < "$_vsrc" 2>/dev/null) || return 2
+  [ -n "$_vsz" ] && [ "$_vsz" -gt 0 ] 2>/dev/null || return 2
+  dd if="$_vdst" bs="$_vsz" count=1 2>/dev/null | cmp -s - "$_vsrc"
+}
+
 current_pid() {
   [ -f "$PID_FILE" ] || return 1
   pid=$(cat "$PID_FILE" | tr -d '[:space:]')
@@ -189,6 +200,11 @@ patch_efisp() {
     return 1
   fi
   sync
+  verify_partition "$RUNTIME_DIR/patched.efi" "$BY_NAME_DIR/efisp"
+  if [ $? -eq 1 ]; then
+    write_log "$TEXT_EFISP_FLASH_FAILED (verify mismatch)"
+    return 1
+  fi
   write_log "$TEXT_EFISP_FLASH_OK"
   if ! grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch.log; then
     write_log "$TEXT_GBL_VULN"
@@ -309,6 +325,8 @@ run_flash() {
     set_block_rw "$dst"
     dd if="$src" of="$dst" bs=4M conv=fsync >> "$LOG_FILE" 2>&1 || { write_state error "$TEXT_FLASH_PART failed"; exit 1; }
     sync
+    verify_partition "$src" "$dst"
+    [ $? -eq 1 ] && { write_state error "$TEXT_FLASH_PART $part verify mismatch"; exit 1; }
     write_log "$TEXT_FLASH_PART $part -> $dst $TEXT_FLASH_OK"
   done
 

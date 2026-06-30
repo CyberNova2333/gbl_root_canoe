@@ -121,6 +121,16 @@ set_block_rw() {
   return 0
 }
 
+# Read N bytes back (N = source size) and compare, to catch a silent/partial
+# write before reboot. Returns: 0 match, 1 mismatch, 2 cannot verify (skip).
+verify_partition() {
+  _vsrc="$1"; _vdst="$2"
+  command -v cmp >/dev/null 2>&1 || return 2
+  _vsz=$(wc -c < "$_vsrc" 2>/dev/null) || return 2
+  [ -n "$_vsz" ] && [ "$_vsz" -gt 0 ] 2>/dev/null || return 2
+  dd if="$_vdst" bs="$_vsz" count=1 2>/dev/null | cmp -s - "$_vsrc"
+}
+
 ui_print "$T_EFISP_TITLE"
 ui_print "$T_SOC"
 ui_print "$T_CHECK_EXP"
@@ -157,6 +167,11 @@ while true; do
       abort "flash failed"
     fi
     sync
+    verify_partition $RUNTIME_DIR/patched.efi $BY_NAME_DIR/efisp
+    if [ $? -eq 1 ]; then
+      ui_print "$T_FLASH_FAIL"
+      abort "verify mismatch"
+    fi
     ui_print "$T_DONE_YES"
     rm -rf $RUNTIME_DIR
     break

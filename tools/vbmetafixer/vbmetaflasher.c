@@ -155,6 +155,16 @@ static int transplant_vbmeta(const char *vbmeta_path, const char *source_image,
         return -1;
     }
 
+    /* Refuse anything that is not a real vbmeta blob so we never graft garbage
+     * onto an image that will later be flashed. */
+    if (vbmeta_size < AVB_VBMETA_IMAGE_HEADER_SIZE ||
+        memcmp(vbmeta_data, AVB_MAGIC, 4) != 0) {
+        fprintf(stderr, "Source is not a valid VBMeta blob (missing '%s' magic "
+                "or too small): %s\n", AVB_MAGIC, vbmeta_path);
+        free(vbmeta_data);
+        return -1;
+    }
+
     size_t target_size;
     uint8_t *target_data = read_file(source_image, &target_size);
     if (!target_data) {

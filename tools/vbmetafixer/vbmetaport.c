@@ -118,6 +118,15 @@ static int transplant_vbmeta(const char *source_vbmeta, const char *target_image
     }
     printf("Source VBMeta: %s (%zu bytes)\n\n", source_vbmeta, vbmeta_size);
 
+    /* Refuse anything that is not a real vbmeta blob so we never graft garbage
+     * onto an image that will later be flashed. */
+    if (verify_avb_header(vbmeta_data, vbmeta_size) != 0) {
+        fprintf(stderr, "Source is not a valid VBMeta blob (missing '%s' magic "
+                "or too small)\n", AVB_MAGIC);
+        free(vbmeta_data);
+        return -1;
+    }
+
     /* 2. Read target image */
     printf("[Step 2] Read target image\n");
     printf("----------------------------------------------------------------------\n");
