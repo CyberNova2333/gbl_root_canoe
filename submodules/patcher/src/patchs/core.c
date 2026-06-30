@@ -174,7 +174,7 @@ int32_t patch_adrl_unlocked_to_locked(char* buffer, int32_t size, uint64_t load_
 #include "patchs/oplus/forceenablefastboot.h"
 /* forceenablerecovery: disabled pending on-device validation (see PatchBuffer) */
 #include "patchs/oplus/forceenablerecovery.h"
-bool PatchBuffer(char* data, int32_t size, bool keep_warning) {
+bool PatchBuffer(char* data, int32_t size) {
     if (patch_abl_gbl(data, size) != 0)
         printf("Warning: Failed to patch ABL GBL\n");
 
@@ -210,10 +210,7 @@ bool PatchBuffer(char* data, int32_t size, bool keep_warning) {
 
 
     //oplus
-    if (keep_warning) {
-        printf("Keeping yellow warning (skipping warning patch) so third-party "
-               "Recovery can boot under fake-lock\n");
-    } else if (!patch_warning(data, size, global_var_offset)) {
+    if (!patch_warning(data, size, global_var_offset)) {
         printf("OPlus Warning: patch_warning failed\n");
     }
 
