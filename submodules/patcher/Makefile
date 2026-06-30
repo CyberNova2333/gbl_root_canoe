@@ -1,6 +1,10 @@
 SRCS := $(shell find src -name '*.c')
 CFLAGS := -O2 -Iinclude
 
+# 'build' is also the output directory name; mark targets phony so they always
+# run instead of being skipped as "up to date" once the directory exists.
+.PHONY: clean build build_android build_windows
+
 clean:
 	rm -rf build || true
 
